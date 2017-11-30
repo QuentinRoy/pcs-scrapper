@@ -1,5 +1,5 @@
 {
-  "name": "precision-scrapper",
+  "name": "pcs-scrapper",
   "version": "0.1.0",
   "description": "Scrapper for precision conference reviews.",
   "main": "index.js",
