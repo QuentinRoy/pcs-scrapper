@@ -3,6 +3,7 @@ const log = require('loglevel');
 const pluralize = require('pluralize');
 const { promisify } = require('util');
 const fs = require('fs');
+const pkg = require('./package.json');
 
 const writeFile = promisify(fs.writeFile);
 const readFile = promisify(fs.readFile);
@@ -32,28 +33,18 @@ const logIn = async (loginPage, username, password) => {
  * Fetch the submission categories.
  *
  * @param {Page} mainReviewsPage Page of the submissions categories (myHome on precision conference).
- * @return {Promise<[{ name, link, address, row  }]>} A promise that resolves with an array with the submission categories.
+ * @return {Promise<[{ name, link, address, row }]>} A promise that resolves with an array with the submission categories.
  */
-const fetchSubmissionCategories = async mainReviewsPage => {
-  // Fetch all the links to review categories (e.g. conferences).
-  // We look for links to avoid selecting the empty tds.
-  const links = await mainReviewsPage.$$('h1 + div table td a');
-
-  // From the link, fetch all useful properties.
-  const cats = links.map(async link => {
-    const row = await link
-      .getProperty('parentNode')
-      .then(linkTd => linkTd.getProperty('parentNode'));
-    return {
-      name: await row
-        .$('td')
-        .then(el => el.getProperty('innerText'))
-        .then(prop => prop.jsonValue()),
-      address: await link.getProperty('href').then(prop => prop.jsonValue()),
-    };
-  });
-  return Promise.all(cats);
-};
+const fetchSubmissionCategories = mainReviewsPage =>
+  // Fetch all the links to review categories (e.g. conferences). We look for links to avoid selecting the empty tds.
+  mainReviewsPage.$$eval('h1 + div table td a', links =>
+    Array.from(links)
+      // Query their properties.
+      .map(link => ({
+        name: link.parentNode.parentNode.querySelector('td').innerText,
+        address: link.href,
+      })),
+  );
 
 /**
  * Fetch the submissions of a submission category.
@@ -61,26 +52,20 @@ const fetchSubmissionCategories = async mainReviewsPage => {
  * @param {Browser} submissionsPage The submission pages.
  * @return {Promise<[{ status, id, paperName }]>} A promise that resolves with an array with the submission.
  */
-const fetchSubmissionList = async submissionsPage => {
-  const submissionTrList = await submissionsPage.$$(
-    'h1 + blockquote table tr:nth-child(n + 4)',
+const fetchSubmissionList = submissionsPage =>
+  submissionsPage.$$eval('h1 + blockquote table tr:nth-child(n + 4)', trs =>
+    // Fetch the table row of each submission.
+    Array.from(trs)
+      // Query their properties.
+      .map(tr => {
+        const tds = tr.querySelectorAll('td');
+        return {
+          id: tds[6].innerText,
+          title: tds[8].querySelector('a').title,
+          address: tds[12].querySelector('a').href,
+        };
+      }),
   );
-  const submissions = submissionTrList.map(async tr => {
-    const tds = await tr.$$('td');
-    return {
-      id: await tds[6].getProperty('innerText').then(prop => prop.jsonValue()),
-      title: await tds[8]
-        .$('a')
-        .then(a => a.getProperty('title'))
-        .then(prop => prop.jsonValue()),
-      address: await tds[12]
-        .$('a')
-        .then(a => a.getProperty('href'))
-        .then(prop => prop.jsonValue()),
-    };
-  });
-  return Promise.all(submissions);
-};
 
 (async () => {
   // Start up.
@@ -108,7 +93,7 @@ const fetchSubmissionList = async submissionsPage => {
 
   // Fetch the submissions of each submission categhories
   log.info('Scrap reviews...');
-  const data = await Promise.all(
+  const categoriesData = await Promise.all(
     categories.map(async cat => {
       const catPage = await browser.newPage();
       await catPage.goto(cat.address, {
@@ -120,7 +105,20 @@ const fetchSubmissionList = async submissionsPage => {
   );
 
   // Write the result.
-  await writeFile(OUTPUT_FILE, JSON.stringify(data, null, 2));
+  await writeFile(
+    OUTPUT_FILE,
+    JSON.stringify(
+      {
+        scrapper: pkg.name,
+        version: pkg.version,
+        username: creds.username,
+        date: new Date(),
+        categories: categoriesData,
+      },
+      null,
+      2,
+    ),
+  );
   log.info(`Data written in ${OUTPUT_FILE}.`);
 
   // Clean up.
