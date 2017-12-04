@@ -30,13 +30,16 @@ const logIn = async (loginPage, username, password) => {
 };
 
 /**
- * Fetch the submission categories.
+ * Scrape the submission categories.
  *
- * @param {Page} mainReviewsPage Page of the submissions categories (myHome on precision conference).
- * @return {Promise<[{ name, link, address, row }]>} A promise that resolves with an array with the submission categories.
+ * @param {Page} mainReviewsPage Page of the submissions categories (myHome on
+ * precision conference).
+ * @return {Promise<[{ name, link, address, row }]>} A promise that resolves
+ * with an array with the submission categories.
  */
-const fetchSubmissionCategories = mainReviewsPage =>
-  // Fetch all the links to review categories (e.g. conferences). We look for links to avoid selecting the empty tds.
+const scrapeSubmissionCategories = mainReviewsPage =>
+  // Fetch all the links to review categories (e.g. conferences). We look for
+  // links to avoid selecting the empty tds.
   mainReviewsPage.$$eval('h1 + div table td a', links =>
     Array.from(links)
       // Query their properties.
@@ -47,25 +50,38 @@ const fetchSubmissionCategories = mainReviewsPage =>
   );
 
 /**
- * Fetch the submissions of a submission category.
+ * Scrape the submissions of a submission category.
  *
- * @param {Browser} submissionsPage The submission pages.
- * @return {Promise<[{ status, id, paperName }]>} A promise that resolves with an array with the submission.
+ * @param {Page} submissionsPage The submission pages.
+ * @return {Promise<[{ id, title, submissionAddress, reviewsAddress, reviewStatus, award, coordinator }]>}
+ * A promise that resolves with an array with the submissions' information.
  */
-const fetchSubmissionList = submissionsPage =>
+const scrapeSubmissionList = submissionsPage =>
   submissionsPage.$$eval('h1 + blockquote table tr:nth-child(n + 4)', trs =>
     // Fetch the table row of each submission.
     Array.from(trs)
       // Query their properties.
       .map(tr => {
         const tds = tr.querySelectorAll('td');
+        const coordinatorMatch = /\(([^)]+)\)/.exec(tds[14].innerText);
         return {
           id: tds[6].innerText,
           title: tds[8].querySelector('a').title,
-          address: tds[12].querySelector('a').href,
+          submissionAddress: tds[8].querySelector('a').href,
+          reviewsAddress: tds[12].querySelector('a').href,
+          reviewStatus: tds[0].innerText,
+          award: tds[4].innerText,
+          coordinator: coordinatorMatch ? coordinatorMatch[1] : undefined,
         };
       }),
   );
+
+/**
+ * Scrape a submission.
+ *
+ * @param {Page} submissionsPage The submission pages.
+ */
+const scrapeSubmission = submissionsPage => submissionInfo;
 
 (async () => {
   // Start up.
@@ -83,7 +99,7 @@ const fetchSubmissionList = submissionsPage =>
 
   // Fetch the review categories.
   log.info('Look for reviews...');
-  const categories = await fetchSubmissionCategories(page);
+  const categories = await scrapeSubmissionCategories(page);
   log.info(
     `Found ${categories.length} review ${pluralize(
       'category',
@@ -91,15 +107,15 @@ const fetchSubmissionList = submissionsPage =>
     )}: ${categories.map(c => c.name).join(', ')}.`,
   );
 
-  // Fetch the submissions of each submission categhories
-  log.info('Scrap reviews...');
+  // Scrape the submissions of each submission categhories
+  log.info('Scrape reviews...');
   const categoriesData = await Promise.all(
     categories.map(async cat => {
       const catPage = await browser.newPage();
       await catPage.goto(cat.address, {
         waitUntil: 'domcontentloaded',
       });
-      const submissions = await fetchSubmissionList(catPage);
+      const submissions = await scrapeSubmissionList(catPage);
       return Object.assign({}, cat, { submissions });
     }),
   );
