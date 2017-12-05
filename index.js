@@ -50,38 +50,109 @@ const scrapeSubmissionCategories = mainReviewsPage =>
   );
 
 /**
- * Scrape the submissions of a submission category.
+ * Scrape a submission.
  *
- * @param {Page} submissionsPage The submission pages.
- * @return {Promise<[{ id, title, submissionAddress, reviewsAddress, reviewStatus, award, coordinator }]>}
- * A promise that resolves with an array with the submissions' information.
+ * @param {Browser} browser The browser.
+ * @param {string} reviewPageAddress The address of the review page.
+ * @param {boolean} isUser True if this review is the one of the logged in user.
+ * @return {Promise<[{}]>} A promise that resolves with the review's info.
  */
-const scrapeSubmissionList = submissionsPage =>
-  submissionsPage.$$eval('h1 + blockquote table tr:nth-child(n + 4)', trs =>
-    // Fetch the table row of each submission.
-    Array.from(trs)
-      // Query their properties.
-      .map(tr => {
-        const tds = tr.querySelectorAll('td');
-        const coordinatorMatch = /\(([^)]+)\)/.exec(tds[14].innerText);
-        return {
-          id: tds[6].innerText,
-          title: tds[8].querySelector('a').title,
-          submissionAddress: tds[8].querySelector('a').href,
-          reviewsAddress: tds[12].querySelector('a').href,
-          reviewStatus: tds[0].innerText,
-          award: tds[4].innerText,
-          coordinator: coordinatorMatch ? coordinatorMatch[1] : undefined,
-        };
-      }),
-  );
+const scrapeSubmissionReview = async (browser, reviewPageAddress, isUser) => {
+  const reviewPage = await browser.newPage();
+  await reviewPage.goto(reviewPageAddress, {
+    waitUntil: 'domcontentloaded',
+  });
+  const result = await reviewPage.$eval('body', body => {
+    const infoTableRows = body.querySelectorAll('table:nth-of-type(2) tr');
+    const reviewerMatch = /\(([^)]+)\)/.exec(
+      infoTableRows[0].querySelector('td:nth-of-type(2)').innerText,
+    );
+    return {
+      number: +infoTableRows[0].querySelector('td:nth-of-type(2) b').innerText,
+      rating: +infoTableRows[2].querySelector('td:nth-of-type(2) b').innerText,
+      reviewerExpertise: +infoTableRows[3].querySelector('td:nth-of-type(2) b')
+        .innerText,
+      reviewerType: reviewerMatch ? reviewerMatch[1] : 'external',
+    };
+  });
+  await reviewPage.close();
+  return Object.assign({ isUser }, result);
+};
 
 /**
  * Scrape a submission.
  *
- * @param {Page} submissionsPage The submission pages.
+ * @param {Browser} browser The browser.
+ * @param {string} submissionPageAddress The address of the submission page.
+ * @return {Promise<[{}]>} A promise that resolves with the submission's reviews.
  */
-const scrapeSubmission = submissionsPage => submissionInfo;
+const scrapeSubmissionReviews = async (browser, submissionPageAddress) => {
+  // Scrape the review addresses.
+  const submissionPage = await browser.newPage();
+  await submissionPage.goto(submissionPageAddress, {
+    waitUntil: 'domcontentloaded',
+  });
+  const reviewAddresses = await submissionPage.$$eval(
+    '#wrap > h1:nth-of-type(2) + blockquote table tr a',
+    links =>
+      Array.from(links).map(link => ({
+        address: link.href,
+        isUser: link.innerText.includes('(you)'),
+      })),
+  );
+  await submissionPage.close();
+  // Scrape the reviews.
+  return Promise.all(
+    reviewAddresses.map(review =>
+      scrapeSubmissionReview(browser, review.address, review.isUser),
+    ),
+  );
+};
+
+/**
+ * Scrape the submissions of a submission category.
+ *
+ * @param {Browser} browser The browser.
+ * @param {string} submissionsPageAddress The address of the submissions page.
+ * @return {Promise<[{ id, title, submissionAddress, reviewsAddress, reviewStatus, award, coordinator, reviews }]>}
+ * A promise that resolves with an array with the submissions' information.
+ */
+const scrapeSubmissions = async (browser, submissionsPageAddress) => {
+  // Scrape the submission list.
+  const catPage = await browser.newPage();
+  await catPage.goto(submissionsPageAddress, {
+    waitUntil: 'domcontentloaded',
+  });
+  const submissions = await catPage.$$eval(
+    'h1 + blockquote table tr:nth-child(n + 4)',
+    trs =>
+      // Fetch the table row of each submission.
+      Array.from(trs)
+        // Query their properties.
+        .map(tr => {
+          const tds = tr.querySelectorAll('td');
+          const coordinatorMatch = /\(([^)]+)\)/.exec(tds[14].innerText);
+          return {
+            id: tds[6].innerText,
+            title: tds[8].querySelector('a').title,
+            submissionAddress: tds[8].querySelector('a').href,
+            reviewsAddress: tds[12].querySelector('a').href,
+            reviewStatus: tds[0].innerText,
+            award: tds[4].innerText,
+            coordinator: coordinatorMatch ? coordinatorMatch[1] : undefined,
+          };
+        }),
+  );
+  await catPage.close();
+  // Scrape the submission reviews.
+  return Promise.all(
+    submissions.map(async sub =>
+      Object.assign({}, sub, {
+        reviews: await scrapeSubmissionReviews(browser, sub.reviewsAddress),
+      }),
+    ),
+  );
+};
 
 (async () => {
   // Start up.
@@ -110,14 +181,11 @@ const scrapeSubmission = submissionsPage => submissionInfo;
   // Scrape the submissions of each submission categhories
   log.info('Scrape reviews...');
   const categoriesData = await Promise.all(
-    categories.map(async cat => {
-      const catPage = await browser.newPage();
-      await catPage.goto(cat.address, {
-        waitUntil: 'domcontentloaded',
-      });
-      const submissions = await scrapeSubmissionList(catPage);
-      return Object.assign({}, cat, { submissions });
-    }),
+    categories.map(async cat =>
+      Object.assign({}, cat, {
+        submissions: await scrapeSubmissions(browser, cat.address),
+      }),
+    ),
   );
 
   // Write the result.
