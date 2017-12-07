@@ -50,7 +50,7 @@ const scrapeSubmissionCategories = mainReviewsPage =>
   );
 
 /**
- * Scrape a submission.
+ * Scrape a review.
  *
  * @param {Browser} browser The browser.
  * @param {string} reviewPageAddress The address of the review page.
@@ -110,33 +110,71 @@ const scrapeSubmissionReview = async (browser, reviewPageAddress, isUser) => {
 };
 
 /**
+ * Scrape a submission's rebuttal.
+ *
+ * @param {Browser} browser The browser.
+ * @param {string} rebuttalPageAddress The address of the rebuttal page.
+ * @return {Promise<string>} A promise that resolves with the rebuttal.
+ */
+const scrapeRebuttal = async (browser, rebuttalPageAddress) => {
+  const rebuttalPage = await browser.newPage();
+  await rebuttalPage.goto(rebuttalPageAddress, {
+    waitUntil: 'domcontentloaded',
+  });
+  const rebuttal = await rebuttalPage.$eval(
+    'h1 + blockquote',
+    blockquote => blockquote.innerText,
+  );
+  await rebuttalPage.close();
+  return rebuttal;
+};
+
+/**
  * Scrape a submission.
  *
  * @param {Browser} browser The browser.
  * @param {string} submissionPageAddress The address of the submission page.
- * @return {Promise<[{}]>} A promise that resolves with the submission's reviews.
+ * @return {Promise<{ rebuttal, reviews }>} A promise that resolves with the
+ * submission's reviews and rebuttal.
  */
-const scrapeSubmissionReviews = async (browser, submissionPageAddress) => {
-  // Scrape the review addresses.
+const scrapeSubmissionReviewsAndRebuttal = async (
+  browser,
+  submissionPageAddress,
+) => {
   const submissionPage = await browser.newPage();
   await submissionPage.goto(submissionPageAddress, {
     waitUntil: 'domcontentloaded',
   });
-  const reviewAddresses = await submissionPage.$$eval(
-    '#wrap > h1:nth-of-type(2) + blockquote table tr a',
-    links =>
-      Array.from(links).map(link => ({
-        address: link.href,
-        isUser: link.innerText.includes('(you)'),
-      })),
+  // Scrape the page.
+  const { reviewAddresses, rebuttalAddress } = await submissionPage.$eval(
+    'body',
+    body => {
+      // Scrape the review links.
+      const reviewLinks = body.querySelectorAll(
+        '#wrap > h1:nth-of-type(2) + blockquote table tr a',
+      );
+      // Scrape the rebutal links.
+      const rebuttalLink = body.querySelector(
+        '#wrap > h1:nth-of-type(2) + blockquote table + p a',
+      );
+      return {
+        reviewAddresses: Array.from(reviewLinks).map(link => ({
+          address: link.href,
+          isUser: link.innerText.includes('(you)'),
+        })),
+        rebuttalAddress: rebuttalLink ? rebuttalLink.href : null,
+      };
+    },
   );
-  await submissionPage.close();
-  // Scrape the reviews.
-  return Promise.all(
-    reviewAddresses.map(review =>
+  // Close the page and scrape the rebuttal and the reviews.
+  const [, rebuttal, ...reviews] = await Promise.all([
+    submissionPage.close(),
+    rebuttalAddress ? scrapeRebuttal(browser, rebuttalAddress) : null,
+    ...reviewAddresses.map(review =>
       scrapeSubmissionReview(browser, review.address, review.isUser),
     ),
-  );
+  ]);
+  return { rebuttal, reviews };
 };
 
 /**
@@ -176,9 +214,11 @@ const scrapeSubmissions = async (browser, submissionsPageAddress) => {
   // Scrape the submission reviews.
   return Promise.all(
     submissions.map(async sub =>
-      Object.assign({}, sub, {
-        reviews: await scrapeSubmissionReviews(browser, sub.reviewsAddress),
-      }),
+      Object.assign(
+        {},
+        sub,
+        await scrapeSubmissionReviewsAndRebuttal(browser, sub.reviewsAddress),
+      ),
     ),
   );
 };
@@ -190,7 +230,7 @@ const scrapeSubmissions = async (browser, submissionsPageAddress) => {
  */
 const main = async () => {
   // Start up.
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({ headless: false });
   const page = await browser.newPage();
   log.info('Loading precisionconference.com/~sigchi...');
   await page.goto('https://precisionconference.com/~sigchi', {
@@ -213,7 +253,7 @@ const main = async () => {
   );
 
   // Scrape the submissions of each submission categhories
-  log.info('Scrape reviews...');
+  log.info('Scrape reviews in progress and corresponding rebuttals...');
   const reviewCategories = await Promise.all(
     categories.map(async cat =>
       Object.assign({}, cat, {
