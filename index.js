@@ -63,16 +63,46 @@ const scrapeSubmissionReview = async (browser, reviewPageAddress, isUser) => {
     waitUntil: 'domcontentloaded',
   });
   const result = await reviewPage.$eval('body', body => {
-    const infoTableRows = body.querySelectorAll('table:nth-of-type(2) tr');
-    const reviewerMatch = /\(([^)]+)\)/.exec(
-      infoTableRows[0].querySelector('td:nth-of-type(2)').innerText,
+    // Scrape interesting content from the page..
+    const [reviewerTd, , ratingTd, expertiseTd] = Array.from(
+      body.querySelectorAll('table:nth-of-type(2) tr'),
+    ).map(tr => tr.querySelector('td:nth-of-type(2)'));
+
+    // Apply some regexp.
+    const reviewerMatch = /\(([^)]+)\)/.exec(reviewerTd.innerText);
+    const ratingScaleMatch = /scale is (\d(?:\.\d)?)\.\.(\d(?:\.\d)?)/.exec(
+      ratingTd.innerText,
     );
+    const expertiseScaleMatch = /scale is (\d(?:\.\d)?)\.\.(\d(?:\.\d)?)/.exec(
+      expertiseTd.innerText,
+    );
+
+    // Scrap the review parts (including titles)
+    const reviewTrs = body.querySelectorAll(
+      'table:nth-of-type(3) > tbody > tr',
+    );
+    const reviewParts = Array.from(reviewTrs)
+      .filter((x, i) => i % 2 === 0)
+      .map((title, i) => ({
+        title: title.innerText ? title.innerText.trim() : null,
+        content: reviewTrs[i * 2 + 1]
+          ? reviewTrs[i * 2 + 1].innerText.trim()
+          : null,
+      }))
+      .filter(({ title }) => title !== '');
+
     return {
-      number: +infoTableRows[0].querySelector('td:nth-of-type(2) b').innerText,
-      rating: +infoTableRows[2].querySelector('td:nth-of-type(2) b').innerText,
-      reviewerExpertise: +infoTableRows[3].querySelector('td:nth-of-type(2) b')
-        .innerText,
+      number: +reviewerTd.querySelector('b').innerText,
+      rating: +ratingTd.querySelector('b').innerText,
+      ratingScale: ratingScaleMatch
+        ? ratingScaleMatch.slice(1, 3).map(x => +x)
+        : null,
+      reviewerExpertise: +expertiseTd.querySelector('b').innerText,
+      expertiseScale: expertiseScaleMatch
+        ? expertiseScaleMatch.slice(1, 3).map(x => +x)
+        : null,
       reviewerType: reviewerMatch ? reviewerMatch[1] : 'external',
+      reviewParts,
     };
   });
   await reviewPage.close();
@@ -138,7 +168,6 @@ const scrapeSubmissions = async (browser, submissionsPageAddress) => {
             submissionAddress: tds[8].querySelector('a').href,
             reviewsAddress: tds[12].querySelector('a').href,
             reviewStatus: tds[0].innerText,
-            award: tds[4].innerText,
             coordinator: coordinatorMatch ? coordinatorMatch[1] : undefined,
           };
         }),
@@ -185,7 +214,7 @@ const main = async () => {
 
   // Scrape the submissions of each submission categhories
   log.info('Scrape reviews...');
-  const categoriesData = await Promise.all(
+  const reviewCategories = await Promise.all(
     categories.map(async cat =>
       Object.assign({}, cat, {
         submissions: await scrapeSubmissions(browser, cat.address),
@@ -202,7 +231,7 @@ const main = async () => {
         version: pkg.version,
         username: creds.username,
         date: new Date(),
-        categories: categoriesData,
+        reviewCategories,
       },
       null,
       2,
