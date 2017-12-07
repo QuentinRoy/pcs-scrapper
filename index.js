@@ -154,7 +154,12 @@ const scrapeSubmissions = async (browser, submissionsPageAddress) => {
   );
 };
 
-(async () => {
+/**
+ * Main function of the script.
+ *
+ * @return {Promise} A promise resolved when the scrapping is done.
+ */
+const main = async () => {
   // Start up.
   const browser = await puppeteer.launch({ headless: true });
   const page = await browser.newPage();
@@ -207,7 +212,9 @@ const scrapeSubmissions = async (browser, submissionsPageAddress) => {
 
   // Clean up.
   await browser.close();
-})().catch(e => {
+};
+
+main().catch(e => {
   log.error(e);
   process.exit(0);
 });
